@@ -3,18 +3,58 @@ import { readFile } from "node:fs/promises";
 import { classify } from "./mock-ai.mjs";
 
 const html = await readFile(new URL("./index.html", import.meta.url));
+const TIMEOUT_MS = 300;
+const ALLOWED_TOPICS = new Set(["delivery", "pricing", "other"]);
 
 function json(response, status, body) {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
 }
 
-async function handleTriage(request, response) {
+async function readBody(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  const { text } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  const result = JSON.parse(await classify(text));
-  return json(response, 200, { status: "ready", ...result });
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function handleTriage(request, response) {
+  let text;
+  try {
+    const body = JSON.parse(await readBody(request));
+    text = body?.text;
+  } catch {
+    return json(response, 400, { status: "invalid_input" });
+  }
+  if (typeof text !== "string" || text.trim() === "") {
+    return json(response, 400, { status: "invalid_input" });
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const raw = await classify(text, { signal: controller.signal });
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return json(response, 200, { status: "manual_review", topic: null, draft: null });
+    }
+    const topic = parsed?.topic;
+    const draft = parsed?.draft;
+    const valid =
+      ALLOWED_TOPICS.has(topic) &&
+      typeof draft === "string" &&
+      draft.trim() !== "";
+    if (!valid) {
+      return json(response, 200, { status: "manual_review", topic: null, draft: null });
+    }
+    return json(response, 200, { status: "ready", topic, draft });
+  } catch {
+    return json(response, 200, { status: "manual_review", topic: null, draft: null });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 createServer(async (request, response) => {

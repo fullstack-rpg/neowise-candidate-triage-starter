@@ -8,7 +8,9 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    .topic { font-weight: 600; }
+    .draft { white-space: pre-wrap; }
+    .warn { color: #b00020; }
   </style>
 </head>
 <body>
@@ -18,18 +20,67 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <div id="result" aria-live="polite"></div>
   <script type="module">
     const form = document.querySelector("form");
     const result = document.querySelector("#result");
+
+    function clearResult() {
+      result.replaceChildren();
+    }
+
+    function renderReady(topic, draft) {
+      clearResult();
+      const topicEl = document.createElement("p");
+      topicEl.className = "topic";
+      topicEl.textContent = `Тема: ${topic}`;
+      const draftEl = document.createElement("p");
+      draftEl.className = "draft";
+      draftEl.textContent = `Черновик: ${draft}`;
+      result.append(topicEl, draftEl);
+    }
+
+    function renderManualReview() {
+      clearResult();
+      const msg = document.createElement("p");
+      msg.className = "warn";
+      msg.textContent =
+        "Не удалось автоматически разобрать заявку. Она передана на ручной разбор, черновик очищен.";
+      result.append(msg);
+    }
+
+    function renderInvalid() {
+      clearResult();
+      const msg = document.createElement("p");
+      msg.className = "warn";
+      msg.textContent = "Введите текст заявки.";
+      result.append(msg);
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      const text = document.querySelector("#message").value;
+      let reply;
+      try {
+        const res = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        reply = await res.json();
+        if (res.status === 400) {
+          renderInvalid();
+          return;
+        }
+      } catch {
+        renderManualReview();
+        return;
+      }
+      if (reply.status === "ready") {
+        renderReady(reply.topic, reply.draft);
+      } else {
+        renderManualReview();
+      }
     });
   </script>
 </body>
